@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Text editor</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}"> <!-- Подключаем CSS -->
+</head>
+<body>
+    <header>Редактор текста</header>
+    <div id="editor"></div>
+    <script src="https://cdn.jsdelivr.net/npm/@editorjs/editorjs@latest"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@editorjs/image@latest"></script>
+    <script>
+        const editor = new EditorJS({
+            holder: 'editor'
+        });
+    </script>
+    <div id="buttons">
+        <label for="expiration">Время жизни поста:</label>
+        <input type="datetime-local" id="expiration" name="expiration">
+        <button>Сохранить</button>
+    </div>
+</body>
+</html>
