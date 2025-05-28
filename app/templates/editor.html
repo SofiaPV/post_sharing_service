@@ -10,16 +10,60 @@
     <header>Редактор текста</header>
     <div id="editor"></div>
     <script src="https://cdn.jsdelivr.net/npm/@editorjs/editorjs@latest"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@editorjs/image@latest"></script>
+
+    <script src="https://cdn.jsdelivr.net/npm/@editorjs/header@latest"></script>
+    <!--<script src="https://cdn.jsdelivr.net/npm/@editorjs/list@latest"></script>-->
+    <script src="https://cdn.jsdelivr.net/npm/@editorjs/paragraph@latest"></script>
+    <!--<script src="https://cdn.jsdelivr.net/npm/@editorjs/delimiter@latest"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@editorjs/simple-image@latest"></script>-->
+
     <script>
         const editor = new EditorJS({
-            holder: 'editor'
+            holder: 'editor',
+            tools: {
+                header: Header,
+                paragraph: {
+                  class: Paragraph,
+                  inlineToolbar: ['bold', 'italic']
+                },
+            }
         });
     </script>
     <div id="buttons">
         <label for="expiration">Время жизни поста:</label>
         <input type="datetime-local" id="expiration" name="expiration">
-        <button>Сохранить</button>
+        <button id="SaveButton">Сохранить</button>
     </div>
 </body>
+<script>
+    const eventSave = async() => {
+        try {
+            const text = await editor.save();
+            const datetime = document.getElementById('expiration').value;
+            if (!datetime) {
+                alert("Вы не указали дату истечения срока годности поста!");
+                return;
+            }
+
+            const content = {
+                'text': text,
+                'date': datetime
+            };
+            const response = await fetch( '/save', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(content)
+            })
+
+            const result = await response.json();
+            alert("Пост успешно сохранен по ссылке " + result.link);
+        } catch(e) {
+            alert("Возникла ошибка: " + e);
+        }
+    }
+
+    document.getElementById('SaveButton').addEventListener('click', eventSave);
+</script>
 </html>
