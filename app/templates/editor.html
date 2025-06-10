@@ -58,7 +58,25 @@
             })
 
             const result = await response.json();
+            if (!response.ok) {
+              let errMsg = 'Неизвестная ошибка';
+
+              if (result.error) {
+                if (typeof result.error === 'string') {
+                  errMsg = result.error;
+                } else if (typeof result.error.message === 'string') {
+                  errMsg = result.error.message;
+                } else {
+                  // Если error — объект, но message не строка, превратим объект в строку
+                  errMsg = JSON.stringify(result.error);
+                }
+              }
+
+              alert("Ошибка: " + errMsg);
+              return;
+            }
             alert("Пост успешно сохранен по ссылке " + result.link);
+
         } catch(e) {
             alert("Возникла ошибка: " + e);
         }
