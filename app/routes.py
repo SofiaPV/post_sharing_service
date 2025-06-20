@@ -1,5 +1,5 @@
 from flask import Blueprint, render_template, request, jsonify
-from .utils import create_url
+from app.utilis.url_generator import create_url
 from datetime import datetime
 
 main_routes = Blueprint('main_routes', __name__)
