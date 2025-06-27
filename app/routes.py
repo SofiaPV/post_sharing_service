@@ -2,8 +2,10 @@ from flask import Blueprint, render_template, request, jsonify
 from app.utilis.url_generator import create_url
 from datetime import datetime
 
-main_routes = Blueprint('main_routes', __name__)
+from app.utilis.Database import DataManager
 
+main_routes = Blueprint('main_routes', __name__)
+database = DataManager()
 
 class InvalidData(Exception):
     """
@@ -51,7 +53,11 @@ def save():
     url = create_url()
     text_user = data.get('text')
 
-    # TODO: save post to DB
+    if not database.add(url=url, expires_at=datetime_user, data=text_user):
+        return jsonify({
+            'message': 'Не удалось сохранить пост',
+            'code': 400,
+        }), 400
 
     return jsonify({'message': "Пост успешно сохранен",
                     'code': 200,
