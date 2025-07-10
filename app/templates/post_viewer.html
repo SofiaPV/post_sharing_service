@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Post viewer</title>
+    <script src="https://cdn.jsdelivr.net/npm/editorjs-html@latest/build/edjsHTML.browser.min.js"></script>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <div id="post"></div>
+  <script>
+    const data = {{ content|safe }};
+    const edjsParser = edjsHTML();
+    const html = edjsParser.parse(data);
+    document.getElementById("post").innerHTML = html.join('');
+  </script>
+</body>
+</html>

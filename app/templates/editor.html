@@ -39,15 +39,19 @@
     const eventSave = async() => {
         try {
             const text = await editor.save();
-            const datetime = document.getElementById('expiration').value;
-            if (!datetime) {
+
+            const datetimeLocal = document.getElementById('expiration').value;
+            const dateObj = new Date(datetimeLocal);
+            const datetimeUTC = dateObj.toISOString();
+
+            if (!datetimeLocal) {
                 alert("Вы не указали дату истечения срока годности поста!");
                 return;
             }
 
             const content = {
                 'text': text,
-                'date': datetime
+                'date': datetimeUTC
             };
             const response = await fetch( '/save', {
                 method: 'POST',
@@ -75,7 +79,7 @@
               alert("Ошибка: " + errMsg);
               return;
             }
-            alert("Пост успешно сохранен по ссылке " + result.link);
+            alert("Пост успешно сохранен по ссылке /post/" + result.link);
 
         } catch(e) {
             alert("Возникла ошибка: " + e);

@@ -1,11 +1,14 @@
+import json
+
 from flask import Blueprint, render_template, request, jsonify
 from app.utilis.url_generator import create_url
-from datetime import datetime
+from datetime import datetime, timezone
+from dateutil.parser import isoparse
 
-from app.utilis.Database import DataManager
+from app.utilis.celery.tasks import save_post, get_post
 
 main_routes = Blueprint('main_routes', __name__)
-database = DataManager()
+
 
 class InvalidData(Exception):
     """
@@ -37,33 +40,72 @@ def get_main_page():
 def save():
     data = request.get_json()
 
+    # datetime checking
     datetime_user = data.get('date')
     if not datetime_user:
         raise InvalidData(400, "Некорректная дата")
 
     try:
-        datetime_user = datetime.strptime(datetime_user, "%Y-%m-%dT%H:%M")
+        datetime_user = isoparse(datetime_user)
     except (ValueError, TypeError) as e:
-        raise InvalidData(400, "Некорректный формат даты",
-                          "Ожидается формат даты: %Y-%m-%dT%H:%M")
+        raise InvalidData(400, "Некорректный формат даты")
 
-    if datetime_user < datetime.now():
+    if datetime_user.tzinfo is None:
+        raise InvalidData(400, "Время должно содержать информацию о часовом поясе")
+
+    datetime_user = datetime_user.astimezone(timezone.utc)
+    if datetime_user < datetime.now(timezone.utc):
         raise InvalidData(400, "Некорректное время жизни поста")
 
-    url = create_url()
+    # data checking
     text_user = data.get('text')
+    if not text_user or not isinstance(text_user, dict):
+        raise InvalidData(400, "Пост пустой или не в формате dict (json)")
 
-    if not database.add(url=url, expires_at=datetime_user, data=text_user):
-        return jsonify({
-            'message': 'Не удалось сохранить пост',
-            'code': 400,
-        }), 400
+    # url creation
+    url = create_url()
 
-    return jsonify({'message': "Пост успешно сохранен",
+    # adding to database using celery queue
+    success = save_post.apply_async(args=[url, datetime_user, text_user])
+    print(f"routes.py: save: {success}")
+
+    return jsonify({'message': "Пост ожидает сохранения",
                     'code': 200,
                     'link': url,
                     }), 200
 
 
+@main_routes.route('/post/<string:url>', methods=['GET'])
+def get_post_main(url):
+    task = get_post.apply_async(args=[url])  # gets Post
+    response = None
+    try:
+        response = task.get()  # wait for 5 sec maximum
+    except Exception as e:
+        print(f"routes.py: get_post_main: {e}")
 
+    if response is None:
+        return jsonify({
+            'message': 'Пост не найден',
+            'code': 404,
+            'link': url
+        }), 404
 
+    def form_response(text: str):
+        return {'blocks': [
+                    {
+                        "id": "1",
+                        "type": "paragraph",
+                        "data": {
+                             "text": text
+                    }}
+                ]}
+
+    data = response["data"]
+    if data is None:
+        if response.status == "pending":
+            data = form_response("Статья ожидает сохранения. Возвращайтесь позже!")
+        else:
+            data = form_response("Произошла ошибка, статью не удалось сохранить :(")
+
+    return render_template("post_viewer.html", content=json.dumps(data))

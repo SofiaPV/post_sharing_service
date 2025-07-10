@@ -4,3 +4,5 @@ __pycache__
 .venv/
 key.json
 *.txt
+.env
+venv_wsl/
