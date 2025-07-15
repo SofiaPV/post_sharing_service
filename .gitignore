@@ -6,3 +6,6 @@ key.json
 *.txt
 .env
 venv_wsl/
+config/
+*.log
+celerybeat-schedule

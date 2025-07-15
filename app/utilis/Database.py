@@ -1,10 +1,13 @@
 import psycopg2
 from psycopg2 import pool
+import redis
 from typing import TypeVar, Generic, Optional, Generator
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from contextlib import contextmanager
+
+from app.utilis.logger import logger
 
 import json
 import traceback
@@ -22,7 +25,7 @@ class Post:
     url: str
     expires_at: datetime
     status: str  # pending/saved/error
-    data: Optional[str] = None
+    data: Optional[dict] = None
 
     def to_dict(self):
         return {
@@ -54,8 +57,8 @@ class DataBase(ABC, Generic[T]):
 class UrlDB(DataBase[Post]):  # class for Post objects
     def __init__(self):
         try:
-            print("Connecting to DB with:")
-            print(f"host={os.getenv('POSTGRES_HOST')}, dbname={os.getenv('POSTGRES_DB')}, user={os.getenv('POSTGRES_USER')}, port={os.getenv('POSTGRES_PORT')}")
+            logger.debug("Database.py: UrlDB: Connecting to DB...")
+            #print(f"host={os.getenv('POSTGRES_HOST')}, dbname={os.getenv('POSTGRES_DB')}, user={os.getenv('POSTGRES_USER')}, port={os.getenv('POSTGRES_PORT')}")
 
             self.pool = psycopg2.pool.ThreadedConnectionPool(1, 20,
                                                              host=os.getenv("POSTGRES_HOST"),
@@ -66,8 +69,7 @@ class UrlDB(DataBase[Post]):  # class for Post objects
                                                              )
             self._create_table()
         except Exception as e:
-            print(f"UrlDB: Creation error: {e}")
-            traceback.print_exc()
+            logger.error(f"Database.py: UrlDB: Creation error: {e}", exc_info=True)
             self.pool = None
             raise RuntimeError("UrlDB: Failed to create DB connection pool")
 
@@ -112,7 +114,7 @@ class UrlDB(DataBase[Post]):  # class for Post objects
                     (%s, %s, %s)
                 """, (url, expires_at, "pending"))
             except Exception as e:
-                print(f"UrlDB: InsertError: {e}")
+                logger.error(f"Database.py: UrlDB: add(): InsertError: {e}", exc_info=True)
                 return False
             return True
 
@@ -123,7 +125,7 @@ class UrlDB(DataBase[Post]):  # class for Post objects
                 UPDATE posts SET status = %s WHERE url = %s
                 """, (status, url))
             except Exception as e:
-                print(f"UrlDB: change_status: {e}")
+                logger.error(f"Databse.py: UrlDB: change_status(): {e}", exc_info=True)
                 return False
             return True
 
@@ -175,10 +177,10 @@ class CloudManager(DataBase[dict]):
             r.raise_for_status()
             download_url = r.json().get("href")
             if not download_url:
-                print(f"CloudManager: get: No href")
+                logger.error(f"Database.py: CloudManager: get(): No href")
                 return None
         except Exception as e:
-            print(f"CloudManager: get {url}: {e}")
+            logger.error(f"Database.py: CloudManager: get() {url}: {e}", exc_info=True)
             return None
 
         # Step 2: download
@@ -187,7 +189,7 @@ class CloudManager(DataBase[dict]):
             r.raise_for_status()
             return r.json()
         except Exception as e:
-            print(f"CloudManager: get {url}: {e}")
+            logger.error(f"Database.py: CloudManager: get() {url}: {e}", exc_info=True)
             return None
 
     def _create_folder(self, name: str) -> bool:
@@ -197,18 +199,18 @@ class CloudManager(DataBase[dict]):
                              params={"path": f"/post_sharing_service{name}"},
                              timeout=5)
             if r.status_code not in (201, 409):
-                print(f"CloudManager: _create_folder: {r.status_code}")
+                logger.error(f"Database.py: CloudManager: _create_folder(): {r.status_code}")
                 return False
             return True
         except Exception as e:
-            print(f"CloudManager: _create_folder: {e}")
+            logger.error(f"Database.py: CloudManager: _create_folder(): {e}", exc_info=True)
             return False
 
     def add(self, url: str, data: dict) -> bool:
 
         # 0: Create folder if not exists
         if not self._create_folder(f"/posts/{url}"):
-            print(f"CloudManager: add: folder creation failed")
+            logger.error(f"Databse.py: CloudManager: add: folder creation failed")
             return False
 
         # 1: Get url to upload
@@ -222,10 +224,10 @@ class CloudManager(DataBase[dict]):
             r.raise_for_status()  # if status code not ok (2xx), then raise an error
             upload_url = r.json().get("href")
             if not upload_url:
-                print(f"CloudManager: add: No url to upload")
+                logger.warning(f"Database.py: CloudManager: add: No url to upload")
                 return False
         except Exception as e:
-            print(f"CloudManager: add: {e}")
+            logger.error(f"Database.py: CloudManager: add: {e}", exc_info=True)
             return False
 
         # 2: upload using URL
@@ -235,7 +237,7 @@ class CloudManager(DataBase[dict]):
                          data=json.dumps(data))
             r.raise_for_status()
         except Exception as e:
-            print(f"CloudManager: add (URL stage): {e}")
+            logger.error(f"Database.py: CloudManager: add (URL stage): {e}", exc_info=True)
             return False
         return True
 
@@ -252,7 +254,7 @@ class CloudManager(DataBase[dict]):
                              params={"path": f"/post_sharing_service/posts/{url}"},
                              timeout=5)
         except Exception as e:
-            print(f"CloudManager: delete: {e}")
+            logger.error(f"CloudManager: delete: {e}", exc_info=True)
             return False
         if r.status_code == 404:
             raise FileNotFoundError("CloudManager: delete: File not found")
@@ -266,12 +268,74 @@ class CloudManager(DataBase[dict]):
                                         },
                                 timeout=5)
             if r.status_code not in (204, 200, 202):  # 204 according to documentation
-                print(f"CloudManager: delete: {r.status_code}")
+                logger.error(f"Database.py: CloudManager: delete: {r.status_code}")
                 return False
             return True
         except Exception as e:
-            print(f"CloudManager: delete {url}: {e}")
+            logger.error(f"Database.py: CloudManager: delete {url}: {e}", exc_info=True)
             return False
+
+
+class RedisManager(DataBase[dict]):
+    """
+    Collects most popular posts. Deletes using LRU rule.
+    """
+
+    def __init__(self):
+        try:
+            self._redis = redis.StrictRedis(
+                host="localhost",
+                port=6379,
+                password=None,
+                #charset="utf-8",
+                decode_responses=True,
+            )
+        except Exception as e:
+            logger.error(f"Database.py: RedisManager: __init__: {e}")
+            self._redis = None
+            logger.info(f"Database.py: RedisManager initialized, connection is {'OK' if self._redis else 'None'}")
+
+    def get(self, url: str) -> Optional[dict]:
+        logger.debug(f"Database.py: RedisManager: get(): entered")
+        if self._redis is None:
+            logger.info(f"Database.py: RedisManager: get(): no post found")
+            return None
+
+        try:
+            data = self._redis.get(url)
+        except Exception as e:
+            logger.error(f"Database.py: RedisManager: get(): {e}", exc_info=True)
+            return None
+        logger.info(f"RedisManager: get(): found data, return")
+        if data is not None:
+            data = json.loads(data)
+        return data
+
+    def delete(self, url: str) -> bool:
+        if self._redis is None:
+            return False
+
+        try:
+            self._redis.delete(url)
+        except Exception as e:
+            logger.error(f"Database.py: RedisManager: delete(): {e}", exc_info=True)
+            return False
+        return True
+
+    def add(self, url: str, data: dict, expires_at: datetime) -> bool:
+        if self._redis is None:
+            return False
+
+        ttl = int((expires_at-datetime.now(timezone.utc)).total_seconds())
+        if ttl <= 0:
+            return False
+        try:
+            self._redis.set(url, json.dumps(data), ex=ttl)
+        except Exception as e:
+            logger.error(f"Database.py: RedisManager: add(): {e}", exc_info=True)
+            return False
+        logger.info(f"Database.py: RedisManager: add(): ttl = {ttl}, data = '{str(data)[:30]}...'")
+        return True
 
 
 class DataManager(DataBase[Post]):
@@ -284,12 +348,22 @@ class DataManager(DataBase[Post]):
     def __init__(self):
         self._db = UrlDB()
         self._cloud_storage = CloudManager()
+        self._redis = RedisManager()
 
     def get(self, url: str) -> Optional[Post]:
         post_info = self._db.get(url)
         if post_info is None or post_info.expires_at <= datetime.now(timezone.utc):
+            logger.info(f"Database.py: DataManager: get(): no post info found OR post expired")
             return None
-        data = self._cloud_storage.get(url)
+        data = self._redis.get(url)
+        if data is None:
+            logger.info(f"Database.py: DataManager: get(): no info in Redis")
+            data = self._cloud_storage.get(url)
+            if data is not None:
+                logger.info(f"Database.py: DataManager: get(): post got from cloud")
+                self._redis.add(url, data, post_info.expires_at)
+        else:
+            logger.info(f"Database.py: DataManager: get(): post got from Redis: {data}, {type(data)}")  # {type(data)}
         post_info.data = data
         return post_info
 
@@ -301,7 +375,7 @@ class DataManager(DataBase[Post]):
                 return True
             return False
         except Exception as e:
-            print(f"DataManager: delete: {e}")
+            logger.error(f"Database.py: DataManager: delete(): {e}")
             return False
 
         if response:

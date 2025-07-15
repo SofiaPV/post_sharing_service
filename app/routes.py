@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from dateutil.parser import isoparse
 
 from app.utilis.celery.tasks import save_post, get_post
+from app.utilis.logger import logger
 
 main_routes = Blueprint('main_routes', __name__)
 
@@ -67,7 +68,7 @@ def save():
 
     # adding to database using celery queue
     success = save_post.apply_async(args=[url, datetime_user, text_user])
-    print(f"routes.py: save: {success}")
+    logger.info(f"routes.py: save: {success}")
 
     return jsonify({'message': "Пост ожидает сохранения",
                     'code': 200,
@@ -80,16 +81,9 @@ def get_post_main(url):
     task = get_post.apply_async(args=[url])  # gets Post
     response = None
     try:
-        response = task.get()  # wait for 5 sec maximum
+        response = task.get()  # TODO: undertand...
     except Exception as e:
-        print(f"routes.py: get_post_main: {e}")
-
-    if response is None:
-        return jsonify({
-            'message': 'Пост не найден',
-            'code': 404,
-            'link': url
-        }), 404
+        logger.error(f"routes.py: get_post_main(): {e}", exc_info=True)
 
     def form_response(text: str):
         return {'blocks': [
@@ -101,7 +95,15 @@ def get_post_main(url):
                     }}
                 ]}
 
+    if response is None:
+        return jsonify({
+            'message': 'Пост не найден',
+            'code': 404,
+            'link': url
+        }), 404
+
     data = response["data"]
+    logger.info(f"routes.py: get_post_main(): {data=}")
     if data is None:
         if response.status == "pending":
             data = form_response("Статья ожидает сохранения. Возвращайтесь позже!")
